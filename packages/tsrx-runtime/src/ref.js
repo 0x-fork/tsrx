@@ -8,6 +8,7 @@ import {
 } from '@tsrx/runtime/language-helpers';
 
 const REF_VALUE = Symbol();
+const REINVOKE_REF = Symbol();
 
 /**
  * Merge multiple refs (function refs and ref objects) into a single
@@ -22,6 +23,82 @@ const REF_VALUE = Symbol();
  * @returns {(node: T | null) => (() => void)}
  */
 export function mergeRefs(...refs) {
+	if (refs.length === 2) {
+		return (node) => {
+			const first = refs[0];
+			const second = refs[1];
+			// For `mergeRefs(a, b)`, apply both refs
+			// directly and record each cleanup step in a scalar slot — a writable
+			// key, `REINVOKE_REF` for a bare callback, or a returned cleanup —
+			// instead of materializing a cleanups array per mount.
+			/** @type {unknown} */
+			let first_step;
+			/** @type {unknown} */
+			let second_step;
+			if (first != null) {
+				if (typeof first === 'function') {
+					const result = first(node);
+					if (typeof result === 'function') {
+						first_step = result;
+					} else {
+						first_step = REINVOKE_REF;
+					}
+				} else {
+					const key = ref_object_prop(first);
+					// Named writes keep the monomorphic property ICs a keyed store
+					// would lose.
+					if (key === 'current') {
+						/** @type {{ current: T | null }} */ (first).current = node;
+						first_step = key;
+					} else if (key === 'value') {
+						/** @type {{ value: T | null }} */ (first).value = node;
+						first_step = key;
+					}
+				}
+			}
+			// This block must stay identical to the `first` block above.
+			if (second != null) {
+				if (typeof second === 'function') {
+					const result = second(node);
+					if (typeof result === 'function') {
+						second_step = result;
+					} else {
+						second_step = REINVOKE_REF;
+					}
+				} else {
+					const key = ref_object_prop(second);
+					if (key === 'current') {
+						/** @type {{ current: T | null }} */ (second).current = node;
+						second_step = key;
+					} else if (key === 'value') {
+						/** @type {{ value: T | null }} */ (second).value = node;
+						second_step = key;
+					}
+				}
+			}
+			return () => {
+				if (first_step === 'current') {
+					/** @type {{ current: unknown }} */ (first).current = null;
+				} else if (first_step === 'value') {
+					/** @type {{ value: unknown }} */ (first).value = null;
+				} else if (first_step === REINVOKE_REF) {
+					/** @type {(node: null) => void} */ (first)(null);
+				} else if (first_step !== undefined) {
+					/** @type {() => void} */ (first_step)();
+				}
+				// This ladder must stay identical to the `first_step` ladder above.
+				if (second_step === 'current') {
+					/** @type {{ current: unknown }} */ (second).current = null;
+				} else if (second_step === 'value') {
+					/** @type {{ value: unknown }} */ (second).value = null;
+				} else if (second_step === REINVOKE_REF) {
+					/** @type {(node: null) => void} */ (second)(null);
+				} else if (second_step !== undefined) {
+					/** @type {() => void} */ (second_step)();
+				}
+			};
+		};
+	}
 	return (node) => {
 		/**
 		 * Flat `[kind, payload]` pairs (kinds defined at `collect_ref_cleanups`):
