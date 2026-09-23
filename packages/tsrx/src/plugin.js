@@ -18,6 +18,7 @@ const CharCode = Object.freeze({
 	lineFeed: 10,
 	carriageReturn: 13,
 	space: 32,
+	exclamation: 33,
 	doubleQuote: 34,
 	numberSign: 35,
 	dollar: 36,
@@ -27,7 +28,9 @@ const CharCode = Object.freeze({
 	closeParen: 41,
 	comma: 44,
 	asterisk: 42,
+	plus: 43,
 	dash: 45,
+	dot: 46,
 	slash: 47,
 	colon: 58,
 	semicolon: 59,
@@ -51,6 +54,24 @@ const CharCode = Object.freeze({
 });
 
 const TYPE_PARAMETER_MODIFIERS = new Set(['const']);
+// Reserved words after which a `/` opens a regular expression literal rather
+// than dividing, because they never end an operand. `of` is handled apart
+// since it is also a plain identifier.
+const REGEX_PRECEDING_KEYWORDS = new Set([
+	'await',
+	'case',
+	'delete',
+	'do',
+	'else',
+	'in',
+	'instanceof',
+	'new',
+	'return',
+	'throw',
+	'typeof',
+	'void',
+	'yield',
+]);
 const regex_identifier = /[$_\p{ID_Start}][$_\u200c\u200d\p{ID_Continue}]*/uy;
 
 /** @type {WeakMap<Parse.Parser, number[]>} */
@@ -226,8 +247,34 @@ function skip_string_from(input, i, quote) {
 }
 
 /**
+ * Skip past a regular expression literal opened at `i`. Returns the index after
+ * its flags, or -1 when a line ends before the closing `/`.
+ * @param {string} input
+ * @param {number} i
+ */
+function skip_regex_from(input, i) {
+	let in_class = false;
+	i++;
+	while (i < input.length) {
+		const ch = input.charCodeAt(i);
+		if (ch === CharCode.lineFeed || ch === CharCode.carriageReturn) return -1;
+		i++;
+		if (ch === CharCode.backslash) i++;
+		else if (ch === CharCode.openBracket) in_class = true;
+		else if (ch === CharCode.closeBracket) in_class = false;
+		else if (ch === CharCode.slash && !in_class) break;
+	}
+	const flags_end = scan_identifier_from(input, i);
+	return flags_end === -1 ? i : flags_end;
+}
+
+/**
  * Scan past a balanced pair starting at `i` (which must point at `open`).
- * Returns the position after the matching close, or -1 if unbalanced.
+ * Strings, comments, and regular expression literals are skipped so brackets
+ * inside them do not count. A `/` divides when the previous token ends an
+ * operand (an identifier, number, literal, or closing bracket, kept through
+ * postfix `!`, `++`, `--`, and `.`) and opens a regex otherwise. Returns the
+ * position after the matching close, or -1 if unbalanced.
  * @param {string} input
  * @param {number} i
  * @param {number} open
@@ -235,15 +282,89 @@ function skip_string_from(input, i, quote) {
  */
 function scan_balanced_from(input, i, open, close) {
 	let depth = 1;
+	let after_operand = false;
+	let after_dot = false;
 	i++;
 	while (i < input.length) {
 		const ch = input.charCodeAt(i);
+		if (
+			ch === CharCode.space ||
+			ch === CharCode.tab ||
+			ch === CharCode.lineFeed ||
+			ch === CharCode.carriageReturn
+		) {
+			i++;
+			continue;
+		}
 		if (ch === CharCode.doubleQuote || ch === CharCode.singleQuote || ch === CharCode.backtick) {
 			i = skip_string_from(input, i, ch);
+			after_operand = true;
+			after_dot = false;
+			continue;
+		}
+		if (ch === CharCode.slash) {
+			const after_comment = skip_space_and_comments_from(input, i);
+			if (after_comment === -1) return -1;
+			if (after_comment !== i) {
+				i = after_comment;
+				continue;
+			}
+			if (after_operand) {
+				after_operand = false;
+				i++;
+			} else {
+				i = skip_regex_from(input, i);
+				if (i === -1) return -1;
+				after_operand = true;
+			}
+			after_dot = false;
 			continue;
 		}
 		if (ch === open) depth++;
 		else if (ch === close && --depth === 0) return i + 1;
+
+		const name_end = scan_identifier_from(input, i);
+		if (name_end !== -1) {
+			const name = input.slice(i, name_end);
+			// A property name after `.` is always an operand. `of` is only the
+			// `for ... of` keyword when it follows an operand, and a reserved
+			// word never ends one.
+			if (after_dot) after_operand = true;
+			else if (name === 'of') after_operand = !after_operand;
+			else after_operand = !REGEX_PRECEDING_KEYWORDS.has(name);
+			after_dot = false;
+			i = name_end;
+			continue;
+		}
+		if (ch >= CharCode.digit0 && ch <= CharCode.digit9) {
+			after_operand = true;
+		} else if (
+			ch === CharCode.closeParen ||
+			ch === CharCode.closeBracket ||
+			ch === CharCode.closeBrace
+		) {
+			after_operand = true;
+		} else if ((ch === CharCode.plus || ch === CharCode.dash) && input.charCodeAt(i + 1) === ch) {
+			// Postfix `++`/`--` keeps the operand; the prefix forms follow a non-operand.
+			after_dot = false;
+			i += 2;
+			continue;
+		} else if (
+			ch === CharCode.dot &&
+			input.charCodeAt(i + 1) === CharCode.dot &&
+			input.charCodeAt(i + 2) === CharCode.dot
+		) {
+			// A spread or rest `...` precedes an operand rather than a property name.
+			after_operand = false;
+			after_dot = false;
+			i += 3;
+			continue;
+		} else if (ch !== CharCode.exclamation && ch !== CharCode.dot) {
+			// Postfix `!` and a number's trailing `.` keep the operand; the
+			// prefix `!` and a leading `.` already follow a non-operand.
+			after_operand = false;
+		}
+		after_dot = ch === CharCode.dot;
 		i++;
 	}
 	return -1;
