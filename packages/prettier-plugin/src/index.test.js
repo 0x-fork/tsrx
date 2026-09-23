@@ -7119,6 +7119,32 @@ function g() {
 }`);
 		});
 
+		it('keeps static and the member separator on class index signatures', async () => {
+			await expectUnchanged('class Registry { [name: string]: number; count = 1; }');
+			await expectUnchanged('class Registry { static [name: string]: number; }');
+			await expectUnchanged(`class Cache {
+  static readonly [key: string]: number;
+  readonly [index: number]: string;
+  [key: symbol]: unknown;
+  size = 0;
+  clear() {}
+}`);
+
+			const result = await format(
+				`class Cache {
+  static [key: string]: number;
+  [index: number]: string;
+  clearAllEntriesFromTheCacheAndResetTheSize() {}
+}`,
+				{ semi: false },
+			);
+			expect(result).toBeWithNewline(`class Cache {
+  static [key: string]: number
+  [index: number]: string
+  clearAllEntriesFromTheCacheAndResetTheSize() {}
+}`);
+		});
+
 		it('keeps override on class members', async () => {
 			await expectUnchanged(`class Derived extends Base {
   override toString(): string {
@@ -7211,6 +7237,170 @@ declare enum Level {
 
 			const result = await format(input);
 			expect(result).toBeWithNewline(expected);
+		});
+	});
+
+	// With `semi: false` only a line break ends a class field, and a few next
+	// members still read as its continuation, so those keep a semicolon.
+	describe('class members without semicolons', () => {
+		/**
+		 * Assert the input is already formatted without semicolons and comes
+		 * back byte-identical.
+		 * @param {string} source
+		 */
+		const expectUnchanged = async (source) => {
+			const result = await format(source, { semi: false });
+			expect(result).toBeWithNewline(source);
+		};
+
+		it('puts members that end without a block on their own lines', async () => {
+			const result = await format(
+				'class Registry { [name: string]: number; count = 1; reset(): void; clear() {} }',
+				{ semi: false },
+			);
+			expect(result).toBeWithNewline(`class Registry {
+  [name: string]: number
+  count = 1
+  reset(): void
+  clear() {}
+}`);
+		});
+
+		it.each([
+			'class Point { x = 1 }',
+			'class List { first() {} last() {} }',
+			'class Lazy { static {} value = 1 }',
+		])('keeps a class on one line when no member needs a line break: %s', async (source) => {
+			await expectUnchanged(source);
+		});
+
+		it.each([
+			`class A {
+  x = a;
+  [k] = 1
+}`,
+			`class A {
+  x: string;
+  [k] = 1
+}`,
+			`class A {
+  x = a;
+  [k: string]: unknown
+}`,
+			`class A {
+  x = a;
+  *gen() {}
+}`,
+			`class A {
+  x = a;
+  [k]() {}
+}`,
+			`class A {
+  x = a;
+  in = 1
+}`,
+			`class A {
+  x = a;
+  instanceof = 1
+}`,
+			`class A {
+  static;
+  run() {}
+}`,
+			`class A {
+  get;
+  set;
+  value = 1
+}`,
+		])('keeps the semicolon the next member depends on: %s', async (source) => {
+			await expectUnchanged(source);
+		});
+
+		it.each([
+			`class A {
+  x = a
+  static [k] = 1
+}`,
+			`class A {
+  x = a
+  private [k] = 1
+}`,
+			`class A {
+  x = a
+  readonly [k: string]: unknown
+}`,
+			`class A {
+  x = a
+  async *gen() {}
+}`,
+			`class A {
+  x = a
+  get [k]() {}
+}`,
+			`class A {
+  x = a
+  #p = 1
+}`,
+			`class A {
+  x = a
+  static {}
+}`,
+			`class A {
+  [k: string]: unknown
+  [j] = 1
+}`,
+			`class A {
+  x = a
+  as = 1
+}`,
+			`class A {
+  x = a
+  satisfies: T
+}`,
+		])('omits the semicolon before a member that cannot continue: %s', async (source) => {
+			await expectUnchanged(source);
+		});
+
+		// Unlike `static`, `get` and `set`, these only modify a member that
+		// starts on the same line
+		it.each([
+			`class A {
+  readonly
+  value = 1
+}`,
+			`class A {
+  declare
+  value: string
+}`,
+			`class A {
+  private
+  run() {}
+}`,
+			`class A {
+  async
+  run() {}
+}`,
+		])('omits the semicolon after a field named like a same-line modifier: %s', async (source) => {
+			await expectUnchanged(source);
+		});
+
+		it('keeps the semicolon when a quoted key prints as a keyword', async () => {
+			const result = await format(`class A { "static"; run() {} x = a; 'in' = 1 }`, {
+				semi: false,
+			});
+			expect(result).toBeWithNewline(`class A {
+  static;
+  run() {}
+  x = a;
+  in = 1
+}`);
+		});
+
+		it('keeps the semicolon ahead of a trailing comment', async () => {
+			await expectUnchanged(`class A {
+  x = a; // first
+  [k] = 1
+}`);
 		});
 	});
 

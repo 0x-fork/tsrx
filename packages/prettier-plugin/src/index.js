@@ -4624,9 +4624,102 @@ function printClassBody(node, path, options, print) {
 		}
 		contentParts.push(line);
 		contentParts.push(members[i]);
+		if (options.semi === false && needsClassPropertySemicolon(node.body[i], node.body[i + 1])) {
+			contentParts.push(';');
+		}
 	}
 
-	return group(['{', indent(contentParts), line, '}']);
+	// Without semicolons only a line break ends a field, an index signature or
+	// a bodiless method, so a class with one before another member can't
+	// collapse onto a single line
+	const shouldBreak =
+		options.semi === false &&
+		node.body.some(
+			(member, i) =>
+				i < node.body.length - 1 &&
+				member.type !== 'StaticBlock' &&
+				!(member.type === 'MethodDefinition' && member.value.body),
+		);
+
+	return group(['{', indent(contentParts), line, '}'], { shouldBreak });
+}
+
+/**
+ * Whether a class field printed without semicolons still needs one, because
+ * the next member would otherwise continue its value or type (`x = a` then
+ * `[k] = 1` reads as `x = a[k] = 1`) or a bare `static`, `get` or `set` field
+ * would become that member's modifier. Mirrors Prettier's
+ * shouldPrintSemicolonAfterClassProperty.
+ * @param {AST.Node} node - The member just printed
+ * @param {AST.Node | undefined} next - The member after it
+ * @returns {boolean}
+ */
+function needsClassPropertySemicolon(node, next) {
+	if (node.type !== 'PropertyDefinition' || !next) {
+		return false;
+	}
+
+	// Only these keywords modify a member on the next line; `readonly`,
+	// `declare`, `async` and the rest must share its line
+	const name = getPrintedKeyName(node);
+	if (
+		!node.value &&
+		!node.typeAnnotation &&
+		(name === 'static' || name === 'get' || name === 'set')
+	) {
+		return true;
+	}
+
+	// Unless a modifier leads, its `[` would index the field's value
+	if (next.type === 'TSIndexSignature') {
+		return !next.static && !next.readonly;
+	}
+
+	// `static { ... }` starts with a keyword
+	if (next.type !== 'PropertyDefinition' && next.type !== 'MethodDefinition') {
+		return false;
+	}
+
+	// So does a member led by a modifier, and a keyword can't continue the field
+	if (
+		next.static ||
+		next.accessibility ||
+		next.abstract ||
+		next.override ||
+		(next.type === 'PropertyDefinition' && (next.readonly || next.declare || next.accessor)) ||
+		(next.type === 'MethodDefinition' &&
+			(next.value.async || next.kind === 'get' || next.kind === 'set'))
+	) {
+		return false;
+	}
+
+	// `in` and `instanceof` read as operators on the field's value
+	const nextName = getPrintedKeyName(next);
+	if (nextName === 'in' || nextName === 'instanceof') {
+		return true;
+	}
+
+	// `[` indexes the field's value and `*` multiplies it
+	return next.computed || (next.type === 'MethodDefinition' && next.value.generator === true);
+}
+
+/**
+ * The name a class member's key prints as. printKey unquotes string keys that
+ * are valid identifiers, so `"static"` prints as `static` and parses as one.
+ * @param {AST.PropertyDefinition | AST.MethodDefinition} member - The class member
+ * @returns {string | null} The name, or null for computed and non-name keys
+ */
+function getPrintedKeyName(member) {
+	if (member.computed) {
+		return null;
+	}
+	if (member.key.type === 'Identifier') {
+		return member.key.name;
+	}
+	if (member.key.type === 'Literal' && typeof member.key.value === 'string') {
+		return member.key.value;
+	}
+	return null;
 }
 
 /**
@@ -6373,6 +6466,10 @@ function printTSNamedTupleMember(node, path, options, print) {
 function printTSIndexSignature(node, path, options, print) {
 	/** @type {Doc[]} */
 	const parts = [];
+	// A static index signature types the constructor, not its instances
+	if (node.static === true) {
+		parts.push('static ');
+	}
 	if (node.readonly === true) {
 		parts.push('readonly ');
 	}
@@ -6388,6 +6485,13 @@ function printTSIndexSignature(node, path, options, print) {
 	if (node.typeAnnotation) {
 		parts.push(': ');
 		parts.push(path.call(print, 'typeAnnotation'));
+	}
+
+	// Interfaces and type literals separate their members, but class members
+	// end themselves — without this the class body runs into the next member
+	const parent = /** @type {AST.Node | null} */ (path.getParentNode());
+	if (parent?.type === 'ClassBody') {
+		parts.push(semi(options));
 	}
 
 	return parts;
