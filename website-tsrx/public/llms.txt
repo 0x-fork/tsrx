@@ -1088,6 +1088,11 @@ several of the child's classes, nest one `:global { ... }` block under your
 scoped selector. Never write a bare `:global` selector or a top-level
 `:global { ... }` block for anything but page-level elements.
 
+`@import` is not allowed in a `<style>` block (`tsrx-css-import`): the imported
+rules would not be scoped. Share scoped styles through an assigned block and
+`apply`. For global CSS, use `:global` in the block, or import the stylesheet in
+JavaScript (`import './global.css'`), which the bundler adds to the page as is.
+
 | I want to ...                                              | Use ...                                                                           |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Style my own elements                                      | A `<style>` block beside them; nothing global                                     |
