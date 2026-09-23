@@ -254,6 +254,9 @@ function scan_balanced_from(input, i, open, close) {
  */
 function looks_like_generic_arrow(input, pos) {
 	if (input.charCodeAt(pos) !== CharCode.lessThan) return false;
+	// Type parameters open with a name, so `<=` and `<<` are operators.
+	const next = input.charCodeAt(pos + 1);
+	if (next === CharCode.equals || next === CharCode.lessThan) return false;
 
 	// Match the angle brackets, skipping over string literals.
 	let i = pos + 1;
@@ -356,6 +359,10 @@ export function TSRXPlugin(config) {
 			#scriptJSXElementDepth = 0;
 			#forceScriptJSXElementDepth = 0;
 			#suppressTemplateRawTextToken = false;
+			// Set while the `?` of an optional class member (`m?<T>()`) is consumed:
+			// `?` allows an expression next, so the tokenizer would otherwise read the
+			// `<` of the type parameters as a JSX tag.
+			#afterOptionalMemberName = false;
 			#templateScriptParsingDepth = 0;
 			#controlFlowBlockAllowsNativeReturn = false;
 			#parsingJSXSwitchCaseScriptStatementDepth = 0;
@@ -640,9 +647,16 @@ export function TSRXPlugin(config) {
 			 * anonymous generic function expressions (`function <T>() {}`); generic
 			 * arrows are handled separately by `looks_like_generic_arrow`.
 			 *
+			 * Returning true splits a lone `<` off whatever follows, so `<=`, `<<`,
+			 * and `<<=` must be left whole. acorn-typescript re-scans a `<<` token
+			 * as `<` when type arguments open with a generic function type
+			 * (`f<<T>() => T>()`), so `<<` never needs splitting here.
+			 *
 			 * @param {number} index
 			 */
 			#canStartTypeParameterOrArgumentList(index) {
+				const next = this.input.charCodeAt(index + 1);
+				if (next === CharCode.equals || next === CharCode.lessThan) return false;
 				const previous = this.#previousNonSpaceTabIndex(index);
 				if (previous < 0) return false;
 				if (previous === index - 1) {
@@ -3029,6 +3043,8 @@ export function TSRXPlugin(config) {
 			readToken(code) {
 				const suppressTemplateRawTextToken = this.#suppressTemplateRawTextToken;
 				this.#suppressTemplateRawTextToken = false;
+				const afterOptionalMemberName = this.#afterOptionalMemberName;
+				this.#afterOptionalMemberName = false;
 				const context = this.curContext();
 				if (
 					(code !== CharCode.lessThan || !can_start_tag_after_lt(this.input, this.pos)) &&
@@ -3057,9 +3073,10 @@ export function TSRXPlugin(config) {
 					// the start of a type argument list (`hello<T>`).
 					const next = this.input.charCodeAt(this.pos + 1);
 					if (
-						next !== CharCode.slash &&
-						(looks_like_generic_arrow(this.input, this.pos) ||
-							this.#canStartTypeParameterOrArgumentList(this.pos))
+						afterOptionalMemberName ||
+						(next !== CharCode.slash &&
+							(looks_like_generic_arrow(this.input, this.pos) ||
+								this.#canStartTypeParameterOrArgumentList(this.pos)))
 					) {
 						++this.pos;
 						return this.finishToken(tt.relational, '<');
@@ -3068,7 +3085,7 @@ export function TSRXPlugin(config) {
 				if (context === tstc.tc_expr || context === tstc.tc_oTag || context === tstc.tc_cTag) {
 					return super.readToken(code);
 				}
-				if (code === CharCode.lessThan) {
+				if (code === CharCode.lessThan && !this.inType) {
 					if (this.exprAllowed && can_start_tag_after_lt(this.input, this.pos)) {
 						++this.pos;
 						return this.finishToken(tstt.jsxTagStart);
@@ -3147,7 +3164,10 @@ export function TSRXPlugin(config) {
 					return this.finishToken(tt.name, this.input.slice(this.start, this.pos));
 				}
 
-				if (code === CharCode.lessThan) {
+				// Inside a type (`new <T>()`, `f?<T>()`, the re-scanned `<<` of
+				// `f<<T>() => T>()`) a `<` is never a JSX tag; acorn-typescript reads it
+				// as a lone `<` there, so the JSX heuristics below only run outside types.
+				if (code === CharCode.lessThan && !this.inType) {
 					// < character
 					const parent = this.#path.at(-1);
 					const inNativeTemplate =
@@ -3587,6 +3607,17 @@ export function TSRXPlugin(config) {
 				this.exitScope();
 				this.labels.pop();
 				return this.finishNode(node, isForIn ? 'ForInStatement' : 'ForOfStatement');
+			}
+
+			/**
+			 * acorn-typescript eats the optional `?` of a class member here; the
+			 * token read right after it is the `<` of `m?<T>()`, never a JSX tag.
+			 *
+			 * @type {Parse.Parser['parsePostMemberNameModifiers']}
+			 */
+			parsePostMemberNameModifiers(methodOrProp) {
+				this.#afterOptionalMemberName = this.type === tt.question;
+				super.parsePostMemberNameModifiers(methodOrProp);
 			}
 
 			/**
