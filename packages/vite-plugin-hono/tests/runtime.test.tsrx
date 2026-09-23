@@ -139,6 +139,29 @@ function StyledApp() @{
 	</div>
 }
 
+let conditional_spread_and_node: HTMLInputElement | null = null;
+let conditional_spread_null_node: HTMLInputElement | null = null;
+
+function ConditionalSpreadApp(props: { enabled: boolean }) @{
+	<>
+		<input class="conditional-spread" {...props.enabled && { disabled: true }} />
+		<input
+			class="conditional-spread"
+			ref={(node: HTMLInputElement | null) => {
+				conditional_spread_and_node = node;
+			}}
+			{...props.enabled && { disabled: true }}
+		/>
+		<input
+			class="conditional-spread"
+			ref={(node: HTMLInputElement | null) => {
+				conditional_spread_null_node = node;
+			}}
+			{...(props.enabled ? { disabled: true } : null)}
+		/>
+	</>
+}
+
 describe('@tsrx/vite-plugin-hono DOM runtime', () => {
 	it('renders and updates Hono DOM state', async () => {
 		render(<Counter />, container);
@@ -228,6 +251,20 @@ describe('@tsrx/vite-plugin-hono DOM runtime', () => {
 			(container.querySelector(reverse) as HTMLButtonElement).click();
 			await Promise.resolve();
 			expect(rows()).toEqual(['b:b', 'a:a']);
+		});
+	}
+
+	for (const enabled of [false, true]) {
+		it(`renders conditional host spreads when the condition is ${enabled}`, () => {
+			conditional_spread_and_node = null;
+			conditional_spread_null_node = null;
+			render(<ConditionalSpreadApp enabled={enabled} />, container);
+			const inputs = Array.from(
+				container.querySelectorAll('.conditional-spread'),
+			) as HTMLInputElement[];
+			expect(inputs.map((input) => input.disabled)).toEqual([enabled, enabled, enabled]);
+			expect(conditional_spread_and_node).toBe(inputs[1]);
+			expect(conditional_spread_null_node).toBe(inputs[2]);
 		});
 	}
 });

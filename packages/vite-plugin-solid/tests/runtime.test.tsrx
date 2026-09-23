@@ -436,6 +436,42 @@ function MultiSpreadExplicitRefApp() @{
 	/>
 }
 
+// ── Conditional host spreads ──
+
+let conditional_spread_and_node: HTMLInputElement | null = null;
+let conditional_spread_null_node: HTMLInputElement | null = null;
+let conditional_spread_if_node: HTMLInputElement | null = null;
+
+function ConditionalSpreadApp(props: { enabled: boolean }) @{
+	<>
+		<input class="conditional-spread" {...props.enabled && { disabled: true }} />
+		<input
+			class="conditional-spread"
+			ref={(node: HTMLInputElement | null) => {
+				conditional_spread_and_node = node;
+			}}
+			{...props.enabled && { disabled: true }}
+		/>
+		<input
+			class="conditional-spread"
+			ref={(node: HTMLInputElement | null) => {
+				conditional_spread_null_node = node;
+			}}
+			{...(props.enabled ? { disabled: true } : null)}
+		/>
+		{/* Solid lowers a spread inside control flow through the plain normalizer. */}
+		@if (true) {
+			<input
+				class="conditional-spread"
+				ref={(node: HTMLInputElement | null) => {
+					conditional_spread_if_node = node;
+				}}
+				{...props.enabled && { disabled: true }}
+			/>
+		}
+	</>
+}
+
 const named_ref_object: { value: HTMLInputElement | null } = { value: null };
 
 function NamedRefObjectApp() @{
@@ -1158,6 +1194,22 @@ describe('tsrx-solid runtime', () => {
 		expect(multi_spread_native_calls).toBe(1);
 		expect(container.querySelector('.multi-spread-explicit-ref')!.hasAttribute('ref')).toBe(false);
 	});
+
+	for (const enabled of [false, true]) {
+		it(`renders conditional host spreads when the condition is ${enabled}`, async () => {
+			conditional_spread_and_node = null;
+			conditional_spread_null_node = null;
+			conditional_spread_if_node = null;
+			await render(ConditionalSpreadApp, { enabled });
+			const inputs = Array.from(
+				container.querySelectorAll('.conditional-spread'),
+			) as HTMLInputElement[];
+			expect(inputs.map((input) => input.disabled)).toEqual([enabled, enabled, enabled, enabled]);
+			expect(conditional_spread_and_node).toBe(inputs[1]);
+			expect(conditional_spread_null_node).toBe(inputs[2]);
+			expect(conditional_spread_if_node).toBe(inputs[3]);
+		});
+	}
 
 	it('assigns explicitly adapted named ref props backed by value-like objects', async () => {
 		named_ref_object.value = null;
