@@ -210,6 +210,47 @@ export function runSharedScopedStyleTests({
 			expect(css).not.toContain('(unused)');
 		});
 
+		it('matches hexadecimal selector escapes against decoded class and id names', () => {
+			const { code, css, cssHash } = compile(
+				String.raw`export function App() @{
+					<>
+						<style>.\31 23 { color: red; } #\31 { color: blue; }</style>
+						<div ${attr}="123" id="1">{'a'}</div>
+					</>
+				}`,
+				'App.tsrx',
+			);
+
+			const hash = hashes_of(cssHash)[0];
+			expect(css).toContain(String.raw`.\31 23.${hash} {`);
+			expect(css).toContain(String.raw`#\31 .${hash}{`);
+			expect(css).not.toContain('(unused)');
+			expect(class_of(code, '123')).toBe(`123 ${hash}`);
+		});
+
+		it('matches attribute selectors against decoded names and values', () => {
+			const { css, cssHash } = compile(
+				String.raw`export function App() @{
+					<>
+						<style>
+							[data-a=\31 23] { color: red; }
+							[data-b="\31 23"] { color: blue; }
+							[\64 ata-c=y] { color: green; }
+							[data-d=a\ ] { margin: 0; }
+							[title=" a "] { padding: 0; }
+							[lang="'x'"] { border: 0; }
+						</style>
+						<div data-a="123" data-b="123" data-c="y" data-d="a " title=" a " lang="'x'">{'a'}</div>
+					</>
+				}`,
+				'App.tsrx',
+			);
+
+			const hash = hashes_of(cssHash)[0];
+			expect(css).toContain(String.raw`[data-a=\31 23].${hash} {`);
+			expect(css).not.toContain('(unused)');
+		});
+
 		it('rfc1-nested-scope: a nested @{} gets its own hash and emits after its parent even when written first', () => {
 			const { code, css, cssHash } = compile(
 				`export function App() @{
@@ -653,6 +694,26 @@ export function runSharedScopedStyleTests({
 			expect(theme.__proto__).toBe(`${hash} __proto__`);
 			expect(theme.card).toBe(`${hash} card`);
 			expect(Object.getPrototypeOf(theme)).toBe(Object.prototype);
+		});
+
+		it('exposes hexadecimal class escapes under their decoded names', () => {
+			// `\31 ` is one escape for the digit 1; its space ends the escape and
+			// is not a descendant combinator.
+			const { code, css } = compile(
+				String.raw`export const theme = <style>
+					.\31 23 { color: red; }
+					.\31 { color: blue; }
+					.\E9t\E9  { color: green; }
+				</style>;`,
+				'App.tsrx',
+			);
+
+			const hash = /\.\\31 23\.(tsrx-[0-9a-f]+)/.exec(css)?.[1];
+			expect(hash).toBeDefined();
+			expect(code).toContain(`'123': '${hash} 123'`);
+			expect(code).toContain(`'1': '${hash} 1'`);
+			expect(code).toContain(`'été': '${hash} été'`);
+			expect(code).not.toContain(`'31'`);
 		});
 
 		it('composes $class from applied same-module themes, own hash last', () => {
