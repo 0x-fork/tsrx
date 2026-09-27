@@ -100,6 +100,182 @@ function f() {
 });
 
 describe('directives', () => {
+	// A comment in an empty `@switch` body stays in it, as Prettier keeps it in
+	// a `switch`: the comment handlers see the `@switch` as a `switch` (#835)
+	test.each([
+		[
+			'function App() @{\n  @switch (a) {\n    // c\n  }\n}',
+			'function App() @{\n  @switch (a) {\n    // c\n  }\n}\n',
+		],
+		[
+			'function App() @{\n  @switch (a) { /* c */ }\n}',
+			'function App() @{\n  @switch (a) {\n    /* c */\n  }\n}\n',
+		],
+		[
+			'function App() @{\n  @switch (a) {\n    // c\n    // d\n  }\n}',
+			'function App() @{\n  @switch (a) {\n    // c\n    // d\n  }\n}\n',
+		],
+		[
+			'function App() @{\n  <div>\n    @switch (a) {\n      // c\n    }\n  </div>\n}',
+			'function App() @{\n  <div>\n    @switch (a) {\n      // c\n    }\n  </div>\n}\n',
+		],
+	])('keeps the comment in the empty @switch body of %j', async (input, expected) => {
+		await expectFormat(input, expected);
+	});
+
+	// A comment in each place of each directive prints as Prettier prints it
+	// in the same statement: the directive in TypeScript, with `<b />` as `b;`
+	// (#835). Where Prettier's own output changes on a second format (a line
+	// comment in `for`'s parentheses, or between `case 1:` and its `{`), both
+	// formats match it; those are on #852's list of Prettier bugs.
+	describe('comments in directives print like the same statement', () => {
+		/** @type {Array<[string, string]>} */
+		const places = [];
+		for (const [kind, c, nl] of [
+			['a line', '// c', '\n'],
+			['a block', '/* c */', ' '],
+		]) {
+			places.push(
+				[`${kind} comment in an empty @if`, `@if (a) {${nl}${c}${nl}}`],
+				[`${kind} comment in @if's parentheses`, `@if (a ${c}${nl}) { <b /> }`],
+				[`${kind} comment between @if's ) and {`, `@if (a) ${c}${nl}{ <b /> }`],
+				[`${kind} comment before @else`, `@if (a) { <b /> } ${c}${nl}@else { <i /> }`],
+				[`${kind} comment in an empty @else`, `@if (a) { <b /> } @else {${nl}${c}${nl}}`],
+				[`${kind} comment in an empty @else if`, `@if (a) { <b /> } @else if (c) {${nl}${c}${nl}}`],
+				[`${kind} comment after @if's last child`, `@if (a) { <b />${nl}${c}${nl}}`],
+				[`${kind} comment in an empty @for of`, `@for (const x of xs) {${nl}${c}${nl}}`],
+				[`${kind} comment in @for of's parentheses`, `@for (const x of xs ${c}${nl}) { <b /> }`],
+				[`${kind} comment in an empty @for in`, `@for (const k in o) {${nl}${c}${nl}}`],
+				[
+					`${kind} comment in an empty classic @for`,
+					`@for (let i = 0; i < n; i++) {${nl}${c}${nl}}`,
+				],
+				[`${kind} comment between @for's ) and {`, `@for (const x of xs) ${c}${nl}{ <b /> }`],
+				[`${kind} comment after @for's (`, `@for (${c}${nl}const x of xs) { <b /> }`],
+				[
+					`${kind} comment before @for's first child`,
+					`@for (const x of xs) {${nl}${c}${nl}<b /> }`,
+				],
+				[`${kind} comment after @for's last child`, `@for (const x of xs) { <b />${nl}${c}${nl}}`],
+				[`${kind} comment in @for in's parentheses`, `@for (const k in o ${c}${nl}) { <b /> }`],
+				[
+					`${kind} comment in a classic @for's init`,
+					`@for (let i = 0 ${c}${nl}; i < n; i++) { <b /> }`,
+				],
+				[
+					`${kind} comment in a classic @for's test`,
+					`@for (let i = 0; i < n ${c}${nl}; i++) { <b /> }`,
+				],
+				[
+					`${kind} comment in a classic @for's update`,
+					`@for (let i = 0; i < n; i++ ${c}${nl}) { <b /> }`,
+				],
+				[`${kind} comment in an empty @switch`, `@switch (a) {${nl}${c}${nl}}`],
+				[`${kind} comment in @switch's parentheses`, `@switch (a ${c}${nl}) {}`],
+				[`${kind} comment in an empty @case`, `@switch (a) { @case 1: {${nl}${c}${nl}} }`],
+				[`${kind} comment after an @case test`, `@switch (a) { @case 1: ${c}${nl}{ <b /> } }`],
+				[`${kind} comment in an empty @default`, `@switch (a) { @default: {${nl}${c}${nl}} }`],
+				[
+					`${kind} comment alone in an @case block with a test in parentheses`,
+					`@switch (role) { @case (admin + "_1"): {${nl}${c}${nl}} @case "editor": { <e /> } }`,
+				],
+				[
+					`${kind} comment before a child of an @case with a test in parentheses`,
+					`@switch (role) { @case (admin + "_1"): {${nl}${c}${nl}<b /> } }`,
+				],
+				[
+					`${kind} comment after an @case test in parentheses`,
+					`@switch (role) { @case (admin + "_1"): ${c}${nl}{ <b /> } }`,
+				],
+				[
+					`${kind} comment between an @case test's ) and :`,
+					`@switch (role) { @case (admin + "_1") ${c}${nl}: { <b /> } }`,
+				],
+				[
+					`${kind} comment first in an @case test's parentheses`,
+					`@switch (role) { @case (${c}${nl}admin + "_1"): { <b /> } }`,
+				],
+				[
+					`${kind} comment in the middle of an @case test in parentheses`,
+					`@switch (role) { @case (admin ${c}${nl}+ "_1"): { <b /> } }`,
+				],
+				[
+					`${kind} comment last in an @case test's parentheses`,
+					`@switch (role) { @case (admin + "_1" ${c}${nl}): { <b /> } }`,
+				],
+				[`${kind} comment after the last @case`, `@switch (a) { @case 1: { <b /> }${nl}${c}${nl}}`],
+				[
+					`${kind} comment before the first @case`,
+					`@switch (a) {${nl}${c}${nl}@case 1: { <b /> } }`,
+				],
+				[`${kind} comment in an empty @try`, `@try {${nl}${c}${nl}} @catch (e) { <i /> }`],
+				[`${kind} comment before @catch`, `@try { <b /> } ${c}${nl}@catch (e) { <i /> }`],
+				[`${kind} comment in an empty @catch`, `@try { <b /> } @catch (e) {${nl}${c}${nl}}`],
+				[
+					`${kind} comment in @catch's parentheses`,
+					`@try { <b /> } @catch (e ${c}${nl}) { <i /> }`,
+				],
+			);
+		}
+		/** @param {string} code */
+		const asStatement = (code) =>
+			code
+				.replace(/^function App\(\) @\{/, 'function f() {')
+				.replace(/@(if|else|for|switch|case|default|try|catch)\b/g, '$1')
+				.replace(/<(\w) \/>/g, '$1;');
+
+		test.each(places)('prints %s', async (_label, body) => {
+			const first = await format(`function App() @{\n  ${body}\n}\n`);
+			const second = await format(first);
+			const expected = await prettier.format(asStatement(`function App() @{\n  ${body}\n}\n`), {
+				parser: 'typescript',
+			});
+			expect(asStatement(first)).toBe(expected);
+			expect(asStatement(second)).toBe(await prettier.format(expected, { parser: 'typescript' }));
+		});
+
+		// TSRX-only places, with no statement to compare with: the comment stays
+		// where it was written, and a second format changes nothing
+		/** @param {string} body */
+		const app = (body) => `function App() @{\n  ${body}\n}\n`;
+		test.each([
+			[
+				'@for (const x of xs) { <b /> } // c\n@empty { <i /> }',
+				'@for (const x of xs) {\n    <b />\n  } // c\n  @empty {\n    <i />\n  }',
+			],
+			[
+				'@for (const x of xs) { <b /> } @empty {\n// c\n}',
+				'@for (const x of xs) {\n    <b />\n  } @empty {\n    // c\n  }',
+			],
+			[
+				'@for (const x of xs) { <b /> } @empty { <i /> /* c */ }',
+				'@for (const x of xs) {\n    <b />\n  } @empty {\n    <i /> /* c */\n  }',
+			],
+			[
+				'@for (const x of xs; index i // c\n) { <b /> }',
+				'@for (\n    const x of xs;\n    index i // c\n  ) {\n    <b />\n  }',
+			],
+			[
+				'@for (const x of xs; key x.id /* c */) { <b /> }',
+				'@for (const x of xs; key x.id /* c */) {\n    <b />\n  }',
+			],
+			[
+				'@for (const x of xs; // c\nindex i) { <b /> }',
+				'@for (\n    const x of xs; // c\n    index i\n  ) {\n    <b />\n  }',
+			],
+			[
+				'@try { <b /> } @pending {\n// c\n} @catch (e) { <i /> }',
+				'@try {\n    <b />\n  } @pending {\n    // c\n  } @catch (e) {\n    <i />\n  }',
+			],
+			[
+				'@try { <b /> } /* c */ @pending { <i /> } @catch (e) { <i /> }',
+				'@try {\n    <b />\n  } /* c */ @pending {\n    <i />\n  } @catch (e) {\n    <i />\n  }',
+			],
+		])('keeps the comment of %j', async (input, expected) => {
+			await expectFormat(app(input), app(expected));
+		});
+	});
+
 	test('@if, @else if, and @else', async () => {
 		await expectFormat(
 			`const A = () => <div>@if (a) { <b /> } @else if (c) { <d /> } @else { <e /> }</div>`,
