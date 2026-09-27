@@ -153,6 +153,24 @@ export function JsxTextWhitespaceApp() @{
 		</div>
 		// prettier-ignore
 		<div class="ws-inline-tooling-comment"><b>t</b> /** @see */ <i /></div>
+		// Each comment is a `{}` of its own, so two on their own lines keep the
+		// words apart as `{/* c */}` twice does in TSX
+		// prettier-ignore
+		<div class="ws-two-comment-lines">
+			a
+			// c
+			// d
+			b
+		</div>
+		// prettier-ignore
+		<div class="ws-comment-touching-tags"><b>t</b>/* c */two<i />/* d */<u /></div>
+		// prettier-ignore
+		<div class="ws-comment-after-directive">
+			@if (true) {
+				<b>t</b>
+			} // c
+			two
+		</div>
 		// The text before `<b>x</b>` here, and the line after it in the next
 		// case, is a non-breaking space (U+00A0)
 		// prettier-ignore
@@ -170,6 +188,8 @@ export function JsxTextWhitespaceApp() @{
 		// targets render the container's own slot differently.
 		// prettier-ignore
 		<div>{show && <span class="ws-container-space-after-close"><b>1</b> 2</span>}</div>
+		// prettier-ignore
+		<div>{show && <span class="ws-container-comment-last">a /* c */</span>}</div>
 		// prettier-ignore
 		<Slot content={<span class="ws-attr-space-after-close"><b>1</b> 2</span>} />
 		// prettier-ignore
@@ -243,6 +263,14 @@ export const jsx_text_whitespace_cases = [
 		'.ws-inline-tooling-comment',
 		'<b>t</b>  <i></i>',
 	],
+	['two comment lines between lines of text', '.ws-two-comment-lines', 'ab'],
+	['comments touching tags', '.ws-comment-touching-tags', '<b>t</b>two<i></i><u></u>'],
+	[
+		'text and a comment before the closing tag of an element in a container',
+		'.ws-container-comment-last',
+		'a ',
+	],
+	['a line comment after a directive block', '.ws-comment-after-directive', '<b>t</b> two'],
 	[
 		'a space after a closing tag in an element in a container',
 		'.ws-container-space-after-close',
