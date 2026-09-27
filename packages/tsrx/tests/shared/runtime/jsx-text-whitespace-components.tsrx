@@ -142,6 +142,17 @@ export function JsxTextWhitespaceApp() @{
 		</div>
 		// prettier-ignore
 		<div class="ws-inline-comment-between-children"><b>t</b> /* c */<i /></div>
+		// A tooling comment keeps the text's line breaks around it, which still
+		// render nothing
+		// prettier-ignore
+		<div class="ws-tooling-comment-between-children">
+			<b>t</b>
+			// @see the next line
+			<i />
+			two
+		</div>
+		// prettier-ignore
+		<div class="ws-inline-tooling-comment"><b>t</b> /** @see */ <i /></div>
 		// The text before `<b>x</b>` here, and the line after it in the next
 		// case, is a non-breaking space (U+00A0)
 		// prettier-ignore
@@ -194,9 +205,9 @@ export function JsxTextWhitespaceApp() @{
 }
 
 /**
- * What each case renders: what React renders for the same TSX, with the
- * comments left out. A comment adds nothing to the text around it, so the
- * whitespace on its two sides is one run.
+ * What each case renders: what React renders for the same TSX, with each
+ * comment written as `{/* … *\/}`. The text on each side of a comment follows
+ * JSX's whitespace rules on its own.
  */
 export const jsx_text_whitespace_cases = [
 	[
@@ -209,18 +220,28 @@ export const jsx_text_whitespace_cases = [
 	[
 		'a block comment on the line after a closing tag',
 		'.ws-block-comment-after-close',
-		'<b>t</b><i></i>',
+		'<b>t</b> <i></i>',
 	],
 	[
 		'a block comment on the line after a self-closing tag',
 		'.ws-block-comment-after-self-close',
-		'<b></b><i></i>',
+		'<b></b> <i></i>',
 	],
-	['a line comment after a closing tag', '.ws-line-comment-after-close', '<b>t</b>two'],
+	['a line comment after a closing tag', '.ws-line-comment-after-close', '<b>t</b> two'],
 	[
 		'a block comment between children on one line',
 		'.ws-inline-comment-between-children',
 		'<b>t</b> <i></i>',
+	],
+	[
+		'a tooling comment on its own line between children',
+		'.ws-tooling-comment-between-children',
+		'<b>t</b><i></i>two',
+	],
+	[
+		'a tooling comment between children on one line',
+		'.ws-inline-tooling-comment',
+		'<b>t</b>  <i></i>',
 	],
 	[
 		'a space after a closing tag in an element in a container',
@@ -272,7 +293,7 @@ export const jsx_text_whitespace_cases = [
 	[
 		"a line comment in an element in a spread attribute's argument",
 		'.ws-spread-line-comment',
-		'<b>t</b>two',
+		'<b>t</b> two',
 	],
 	[
 		'a block comment in an element that is an attribute value without braces',

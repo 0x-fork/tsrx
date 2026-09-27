@@ -1,15 +1,19 @@
 /**
  * Prettier's layout of a JSX element's children, for the elements whose
  * children include TSRX comments (`// …` and `/* … *\/` between children,
- * which TSX reads as text), or text with a word that starts with `//`. Every
- * other element is printed by Prettier itself.
+ * which TSX reads as text, and which `parse.js` gives Prettier as the `{…}`
+ * children `{/* … *\/}` would be). Every other element is printed by Prettier
+ * itself.
  *
  * `printJsxElementInternal` and `printJsxChildren` are copied from Prettier
- * 3.9.6 (`src/language-js/print/jsx.js`, MIT license, Copyright © James Long and
- * contributors). The only changes are in `printJsxChildren`: a comment child
- * chooses the line breaks around it (see `printCommentChild`), and a word that
- * starts with `//` never starts a line. Keep the rest in step with Prettier when
- * upgrading.
+ * 3.9.9 (`src/language-js/print/jsx.js`, MIT license, Copyright © James Long and
+ * contributors). The only changes, marked `TSRX:`, are in `printJsxChildren`,
+ * where a bare `//` differs from `{// … }`: a `//` is a comment only after
+ * whitespace (or at the start of a line, or right after a tag), and it runs to
+ * the end of its line. So a line comment ends its line, keeps whitespace
+ * between it and text or a comment before it, and text that starts with `//`
+ * (right after a block comment) stays on that line. Keep the rest in step with
+ * Prettier when upgrading.
  *
  * @import { AstPath, Doc, ParserOptions } from 'prettier'
  * @import { Node } from './parse.js'
@@ -99,9 +103,16 @@ function isEmptyDoc(doc) {
 	);
 }
 
+/**
+ * TSRX: the line break around a line comment. Inside `{…}` it would be part of
+ * the child; bare, it's a separator that Prettier's clean-up of the children,
+ * which removes a line break before JSX whitespace, must leave in place.
+ */
+const lineCommentBreak = [hardline];
+
 /** @param {Doc} doc */
 const isEmptyStringOrAnyLine = (doc) =>
-	doc === '' || doc === line || doc === hardline || doc === softline;
+	doc === '' || doc === line || doc === hardline || doc === softline || doc === lineCommentBreak;
 
 /**
  * @param {AstPath<Node>} path
@@ -125,14 +136,7 @@ export function printJsxElementInternal(path, options, print) {
 	// can then print as either a space or `{" "}` when breaking.
 	node.children = node.children.map((/** @type {Node} */ child) => {
 		if (isJsxWhitespaceExpression(child)) {
-			// TSRX: a comment prints the `{" "}` beside it (`printCommentChild`).
-			return {
-				type: 'JSXText',
-				value: ' ',
-				raw: ' ',
-				tsrxCommentSpace: child.tsrxCommentSpace,
-				tsrxInCommentRun: child.tsrxInCommentRun,
-			};
+			return { type: 'JSXText', value: ' ', raw: ' ' };
 		}
 		return child;
 	});
@@ -158,13 +162,7 @@ export function printJsxElementInternal(path, options, print) {
 
 	const children = printJsxChildren(path, options, print, whitespace, isFacebookTranslationTag);
 
-	// TSRX: a comment whose run renders a space prints it as JSX whitespace,
-	// which needs `fill`, like text.
-	const containsText = node.children.some(
-		(/** @type {Node} */ child) =>
-			isMeaningfulJsxText(child) ||
-			(child.type === 'TSRXJSXComment' && child.run.space && !child.run.lineBreak),
-	);
+	const containsText = node.children.some(isMeaningfulJsxText);
 
 	// We can end up we multiple whitespace elements with empty string
 	// content between them.
@@ -187,6 +185,14 @@ export function printJsxElementInternal(path, options, print) {
 		const isPairOfHardOrSoftLines =
 			(children[i] === softline && children[i + 1] === '' && children[i + 2] === hardline) ||
 			(children[i] === hardline && children[i + 1] === '' && children[i + 2] === softline);
+
+		// TSRX: a line break after a line comment's, as after `{// …}`.
+		const isLineCommentBreakFollowedByHardline =
+			children[i] === lineCommentBreak && children[i + 1] === '' && children[i + 2] === hardline;
+		if (isLineCommentBreakFollowedByHardline && containsText) {
+			children.splice(i + 1, 2);
+			continue;
+		}
 
 		if (
 			(isPairOfHardlines && containsText) ||
@@ -242,7 +248,10 @@ export function printJsxElementInternal(path, options, print) {
 				continue;
 			}
 
-			if (children[i - 1] === '' && children[i - 2] === hardline) {
+			if (
+				children[i - 1] === '' &&
+				(children[i - 2] === hardline || children[i - 2] === lineCommentBreak)
+			) {
 				// Whitespace after line break
 				multilineChildren.push([/** @type {Doc} */ (multilineChildren.pop()), rawJsxWhitespace]);
 				continue;
@@ -317,8 +326,6 @@ export function printJsxElementInternal(path, options, print) {
  * @returns {Doc[]}
  */
 function printJsxChildren(path, options, print, whitespace, isFacebookTranslationTag) {
-	// TSRX: `{" "}`, written out.
-	const rawWhitespace = options.singleQuote ? "{' '}" : '{" "}';
 	/** @type {Doc} */
 	let prevPart = '';
 	/** @type {Doc[]} */
@@ -337,27 +344,14 @@ function printJsxChildren(path, options, print, whitespace, isFacebookTranslatio
 		prevPart = doc;
 		parts.push(doc, '');
 	}
-	// TSRX: set after a comment child, which already printed the line break or
-	// space after itself.
-	let afterComment = false;
+
+	// TSRX: whether the child before is a line comment, which ends its line.
+	let afterLineComment = false;
 
 	path.each((childPath) => {
-		const { node, next } = /** @type {AstPath<Node>} */ (childPath);
-		if (node.type === 'TSRXJSXComment') {
-			printCommentChild(node);
-			return;
-		}
-		// TSRX: the comment beside a `{" "}` prints it, and whitespace in a
-		// comment's run keeps what the comment printed after itself.
-		if (
-			node.tsrxCommentSpace ||
-			(node.tsrxInCommentRun && node.type === 'JSXText' && !/\n/u.test(getRaw(node)))
-		) {
-			return;
-		}
-		const followsComment = afterComment;
-		if (!node.tsrxInCommentRun) afterComment = false;
-
+		const { node, index, siblings, next } = /** @type {AstPath<Node>} */ (childPath);
+		const followsLineComment = afterLineComment;
+		afterLineComment = node.tsrxComment?.type === 'Line';
 		if (node.type === 'JSXText') {
 			const text = getRaw(node);
 
@@ -368,10 +362,11 @@ function printJsxChildren(path, options, print, whitespace, isFacebookTranslatio
 				// Starts with whitespace
 				if (words[0] === '') {
 					words.shift();
-					if (followsComment) {
-						// TSRX: the comment printed the separator.
-					} else if (/\n/u.test(words[0])) {
-						pushLine(separatorWithWhitespace(isFacebookTranslationTag, words[1], node, next));
+					if (/\n/u.test(words[0])) {
+						// TSRX: after a line comment, its line break separates them.
+						if (!followsLineComment) {
+							pushLine(separatorWithWhitespace(isFacebookTranslationTag, words[1], node, next));
+						}
 					} else {
 						pushLine(whitespace);
 					}
@@ -392,10 +387,7 @@ function printJsxChildren(path, options, print, whitespace, isFacebookTranslatio
 
 				for (const [i, word] of words.entries()) {
 					if (i % 2 === 1) {
-						// TSRX: `//` after a word is text, and at the start of a line a
-						// comment, so it stays on the line of the word before it.
-						if (words[i + 1].startsWith('//')) push(' ');
-						else pushLine(line);
+						pushLine(line);
 					} else {
 						push(word);
 					}
@@ -416,18 +408,37 @@ function printJsxChildren(path, options, print, whitespace, isFacebookTranslatio
 				if (/** @type {RegExpMatchArray} */ (text.match(/\n/gu)).length > 1) {
 					pushLine(hardline);
 				}
-			} else if (!followsComment) {
+			} else {
 				pushLine(whitespace);
 			}
 		} else {
 			const printedChild = print();
+			const lineComment = node.tsrxComment?.type === 'Line';
+			// TSRX: a line comment after text or a comment needs whitespace before
+			// it: touching them, it would be text. Where Prettier would leave no
+			// space (a line break in the source), it starts its own line.
+			if (
+				lineComment &&
+				followsText(/** @type {Node[]} */ (siblings), /** @type {number} */ (index)) &&
+				!(parts.length > 1 && parts.at(-1) === '' && parts.at(-2) === whitespace)
+			) {
+				if (parts.length > 1 && parts.at(-1) === '') parts[parts.length - 2] = lineCommentBreak;
+				else pushLine(lineCommentBreak);
+			}
 			push(printedChild);
 
 			const directlyFollowedByMeaningfulText = next && isMeaningfulJsxText(next);
-			if (directlyFollowedByMeaningfulText) {
+			if (lineComment) {
+				// TSRX: a line comment ends its line.
+				pushLine(lineCommentBreak);
+			} else if (directlyFollowedByMeaningfulText) {
 				const trimmed = jsxWhitespace.trim(getRaw(next));
 				const [firstWord] = jsxWhitespace.split(trimmed);
-				pushLine(separatorNoWhitespace(isFacebookTranslationTag, firstWord, node, next));
+				// TSRX: text that starts with `//` right after a block comment is
+				// text only there; at the start of a line, it would be a comment.
+				if (!(node.tsrxComment && getRaw(next).startsWith('//'))) {
+					pushLine(separatorNoWhitespace(isFacebookTranslationTag, firstWord, node, next));
+				}
 			} else {
 				pushLine(hardline);
 			}
@@ -435,114 +446,24 @@ function printJsxChildren(path, options, print, whitespace, isFacebookTranslatio
 	}, 'children');
 
 	return parts;
+}
 
-	/**
-	 * TSRX: a comment keeps its place among the children. One on its own line
-	 * stays on its own line; one after other content on the same line stays
-	 * there, with the space the source has before it. A line comment always
-	 * ends its line; a block comment keeps what followed it on its line.
-	 *
-	 * The whitespace around a group of comments renders as one run
-	 * (`describeCommentRuns` in `parse.js`), so its outer sides are printed to
-	 * render the same: a run that renders a space keeps it where a line may
-	 * break (as `{" "}` there, like Prettier's JSX whitespace, or a line
-	 * between two words), and a run with a line break keeps one, which the
-	 * start or end of the children only has when the element breaks.
-	 * @param {Node} comment
-	 */
-	function printCommentChild(comment) {
-		const { run } = comment;
-		const lineAfter = comment.commentType === 'Line' || comment.newlineAfter;
-		/** @type {Doc} */
-		let before = comment.newlineBefore ? hardline : comment.spaceBefore ? ' ' : '';
-		/** @type {Doc} */
-		let after = lineAfter ? hardline : comment.spaceAfter ? ' ' : '';
-		const outerBefore = run.first;
-		const outerAfter = run.last;
-		if (!outerBefore) {
-			// A line comment after another comment starts its own line: on the same
-			// line, the parser reads it as text.
-			before =
-				run.gapBefore === 'line' || comment.commentType === 'Line'
-					? hardline
-					: run.gapBefore === 'space'
-						? ' '
-						: '';
-		}
-		if (
-			run.space &&
-			!run.lineBreak &&
-			run.hardBreak &&
-			!(run.before === 'text' && run.after === 'text')
-		) {
-			// A line break in the run would drop a space beside it, so the space
-			// the run renders is written out, before the comments.
-			if (outerBefore) before = comment.newlineBefore ? [rawWhitespace, hardline] : rawWhitespace;
-			if (outerAfter && !lineAfter) after = comment.spaceAfter ? ' ' : '';
-		} else if (run.space && !run.lineBreak) {
-			if (run.before === 'text' && run.after === 'text') {
-				// Between two words, a line break renders the space too.
-				if (outerBefore && comment.spaceBefore) before = line;
-				if (outerAfter && comment.spaceAfter) after = line;
-			} else if (run.after === 'boundary' || run.before === 'boundary') {
-				// The start or end of the children has a line break when the element
-				// breaks, so the space goes there, where it prints as `{" "}`.
-				if (run.after === 'boundary') {
-					if (outerAfter) after = whitespace;
-					if (outerBefore && run.before === 'boundary') before = '';
-				} else if (outerBefore) {
-					before = whitespace;
-				}
-			} else {
-				// The space stays on its side, once for all the comments; a line
-				// break there prints `{" "}`.
-				if (run.spaceAfter) {
-					if (outerAfter) after = whitespace;
-				} else if (outerBefore && comment.spaceBefore) {
-					before = whitespace;
-				}
-			}
-		} else if (run.lineBreak) {
-			// A space beside the start or end of the children renders nothing here.
-			if (outerBefore && run.before === 'boundary' && !comment.newlineBefore) before = '';
-			if (outerAfter && run.after === 'boundary' && !lineAfter) after = '';
-		}
-		// A line comment after text on its line is read as text, so it starts
-		// its own line; between two words, the line break renders the space.
-		if (
-			outerBefore &&
-			comment.commentType === 'Line' &&
-			run.before === 'text' &&
-			(before === ' ' || before === line || before === '')
-		) {
-			before = hardline;
-		}
-		// A line comment ends its line.
-		if (comment.commentType === 'Line') after = hardline;
-		// Text that starts with a `//` word stays on the comment's line, where
-		// it's text; at the start of a line, or after a `{" "}`, it's a comment.
-		if (outerAfter && run.slashTextAfter && (after === line || after === whitespace)) after = ' ';
-		// The line break at the start or end of the children is only there when
-		// the element breaks. Without it, a space left in the run would render.
-		const breaksAtEdge =
-			run.lineBreak &&
-			((outerBefore &&
-				run.before === 'boundary' &&
-				comment.newlineBefore &&
-				(after === ' ' || !outerAfter)) ||
-				(outerAfter && run.after === 'boundary' && lineAfter && (before === ' ' || !outerBefore)));
-
-		if (parts.length > 1 && parts.at(-1) === '') {
-			// Replace the separator printed after the previous child.
-			parts[parts.length - 2] = before;
-		} else {
-			pushLine(before);
-		}
-		push(breaksAtEdge ? [print(), breakParent] : print());
-		prevPart = after;
-		parts.push(after, '');
-		afterComment = true;
+/**
+ * TSRX: whether text or a comment, rather than an element or an expression,
+ * comes before the child at `index`, past any whitespace, which Prettier may put
+ * on one line. A line comment there would be text.
+ * @param {Node[]} siblings
+ * @param {number} index
+ * @returns {boolean}
+ */
+function followsText(siblings, index) {
+	for (let i = index - 1; i >= 0; i--) {
+		const sibling = siblings[i];
+		if (sibling.tsrxComment) return true;
+		if (sibling.type !== 'JSXText') return false;
+		if (jsxWhitespace.hasNonWhitespaceCharacter(getRaw(sibling))) return true;
 	}
+	return false;
 }
 
 /**

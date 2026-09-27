@@ -15,6 +15,24 @@ import {
 	TSRX_RETURN_STATEMENT_ERROR,
 } from './analyze/validation.js';
 import { is_tsrx_render_output_node } from './utils/ast.js';
+import { is_jsx_child_tooling_comment } from './comment-utils.js';
+
+/**
+ * A comment between template children, as `#parseTemplateRawText` reads it.
+ * @typedef {{ type: 'Line' | 'Block', value: string, start: number, end: number }} TemplateTextComment
+ */
+
+/**
+ * JSX's whitespace rule for template text: text renders unless it's only
+ * whitespace with a line break (layout indentation); an inline space between
+ * two children renders. JSX whitespace is space, tab, and line breaks, as Babel
+ * and Prettier read it: a non-breaking space is text, which the JSX compiler
+ * may still trim at the edge of a line, as it does in TSX.
+ * @param {string} value
+ */
+function renders_template_text(value) {
+	return regex_not_whitespace.test(value) || (value !== '' && !/[\n\r]/.test(value));
+}
 
 /**
  * An expression being read that can be a generic arrow function (see
@@ -1668,20 +1686,34 @@ export function TSRXPlugin(config) {
 				return this.#keywordEndsAt(previous, 'function');
 			}
 
-			#parseTemplateRawText() {
+			/**
+			 * Read template text up to the next child or closing tag, and add it to
+			 * `body` (see `#addTemplateText`). Returns where the text ends.
+			 * @param {any[]} body
+			 * @returns {number}
+			 */
+			#parseTemplateRawText(body) {
 				const start = this.start;
+				const start_loc = this.startLoc;
 				// The current jsxText token spans `[start, token_end]`. Comments inside
 				// that span were already consumed and recorded by the tokenizer
 				// (`jsx_readToken`); only comments at/after `token_end` (e.g. a body that
 				// opens with a comment, where the raw-text token stops before it) still
-				// need recording here. Either way we drop `//` lines from the JSXText value
-				// and always advance past them so the scan can't re-tokenize the same spot.
+				// need recording here. Either way we always advance past them so the scan
+				// can't re-tokenize the same spot.
 				const token_end = this.end;
 				let index = start;
-				let value = '';
+				// The text between the comments, which render like `{/* … */}` in TSX:
+				// each piece follows JSX's whitespace rules on its own.
+				/** @type {Array<[number, number]>} */
+				const pieces = [];
+				/** @type {TemplateTextComment[]} */
+				const comments = [];
+				let piece_start = start;
 				while (index < this.input.length) {
 					if (this.#isTemplateLineCommentStart(index, start)) {
 						const comment_start = index;
+						pieces.push([piece_start, comment_start]);
 						index += 2;
 						while (
 							index < this.input.length &&
@@ -1694,10 +1726,18 @@ export function TSRXPlugin(config) {
 						if (comment_start >= token_end) {
 							this.#emitTemplateLineComment(comment_start, index, null);
 						}
+						comments.push({
+							type: 'Line',
+							value: this.input.slice(comment_start + 2, index),
+							start: comment_start,
+							end: index,
+						});
+						piece_start = index;
 						continue;
 					}
 					if (this.#isTemplateBlockCommentStart(index)) {
 						const comment_start = index;
+						pieces.push([piece_start, comment_start]);
 						const comment_start_loc = get_line_info(this, comment_start);
 						const close = this.input.indexOf('*/', index + 2);
 						const value_end = close === -1 ? this.input.length : close;
@@ -1714,6 +1754,13 @@ export function TSRXPlugin(config) {
 								null,
 							);
 						}
+						comments.push({
+							type: 'Block',
+							value: this.input.slice(comment_start + 2, value_end),
+							start: comment_start,
+							end: index,
+						});
+						piece_start = index;
 						continue;
 					}
 					const ch = this.input.charCodeAt(index);
@@ -1726,17 +1773,10 @@ export function TSRXPlugin(config) {
 					) {
 						break;
 					}
-					value += this.input[index];
 					index++;
 				}
 
 				const endLoc = get_line_info(this, index);
-				const node = /** @type {ESTreeJSX.JSXText} */ (this.startNodeAt(start, this.startLoc));
-				node.value = value;
-				// The text as written, which the printers print. A comment between
-				// children isn't part of it: it is a comment, not text as in TSX.
-				node.raw = value;
-
 				if (this.input.slice(start, index).match(regex_newline_characters)) {
 					this.curLine = endLoc.line;
 					this.lineStart = index - endLoc.column;
@@ -1745,23 +1785,93 @@ export function TSRXPlugin(config) {
 				this.#popTemplateLiteralTokenContext();
 				this.next();
 
-				return this.finishNodeAt(node, 'JSXText', index, endLoc);
+				if (comments.length > 0) {
+					pieces.push([piece_start, index]);
+					this.#addTemplateText(body, pieces, comments);
+				} else {
+					const node = /** @type {ESTreeJSX.JSXText} */ (this.startNodeAt(start, start_loc));
+					node.value = this.input.slice(start, index);
+					// The text as written, which the printers print.
+					node.raw = node.value;
+					this.finishNodeAt(node, 'JSXText', index, endLoc);
+					if (renders_template_text(node.value)) body.push(node);
+				}
+				return index;
 			}
 
 			/**
-			 * JSX significant-whitespace rule for a template text child. Text with a
-			 * character other than JSX whitespace is always kept; whitespace-only text
-			 * is kept only when it is an intentional inline space (no line break)
-			 * separating two siblings, and dropped when it is layout indentation (has a
-			 * line break). JSX whitespace is space, tab, and line breaks, as Babel and
-			 * Prettier read it: a non-breaking space is text, which the JSX compiler
-			 * may still trim at the edge of a line, as it does in TSX.
+			 * Add text with comments to `body`. A comment between children renders
+			 * like `{/* … *\/}` in TSX, so the text becomes the children TSX has for
+			 * it: the text between the comments, each piece exactly as written and
+			 * following JSX's whitespace rules on its own, with an empty `{}` between
+			 * two pieces, where the comments are, so that no JSX compiler joins them.
+			 * A piece that is whitespace with a line break renders nothing and is
+			 * left out, as such text is anywhere.
 			 *
-			 * @param {ESTreeJSX.JSXText} node
+			 * A tooling comment (`// @ts-expect-error`, see
+			 * `is_jsx_child_tooling_comment`) gets a `{}` of its own, which holds it
+			 * for the editor's TypeScript, as `{/* @ts-expect-error *\/}` does in
+			 * TSX. The text around it keeps its line breaks, so that the comment
+			 * stays on the line before the child it's about.
+			 * @param {any[]} body
+			 * @param {Array<[number, number]>} pieces The text before, between and
+			 *   after the comments
+			 * @param {TemplateTextComment[]} comments
 			 */
-			#shouldKeepTemplateTextNode(node) {
-				const value = node.value;
-				return regex_not_whitespace.test(value) || (value !== '' && !/[\n\r]/.test(value));
+			#addTemplateText(body, pieces, comments) {
+				const keep_layout = comments.some((comment) =>
+					is_jsx_child_tooling_comment(/** @type {any} */ (comment)),
+				);
+				/** @type {[number, number] | null} */
+				let previous = null;
+				for (const [index, [start, end]] of pieces.entries()) {
+					const value = this.input.slice(start, end);
+					if (keep_layout ? value !== '' : renders_template_text(value)) {
+						if (previous && !keep_layout) {
+							body.push(this.#emptyTemplateContainer(previous[1], start));
+						}
+						const node = /** @type {ESTreeJSX.JSXText} */ (
+							this.startNodeAt(start, this.#positionAt(start))
+						);
+						node.value = value;
+						node.raw = value;
+						body.push(this.finishNodeAt(node, 'JSXText', end, this.#positionAt(end)));
+						previous = [start, end];
+					}
+					if (keep_layout && index < comments.length) {
+						body.push(this.#emptyTemplateContainer(comments[index].start, comments[index].end));
+						previous = null;
+					}
+				}
+			}
+
+			/**
+			 * An empty `{}` child, which renders nothing, for the comments from
+			 * `start` to `end`, which the comment attachment puts in its
+			 * `JSXEmptyExpression`. There are no braces in the source.
+			 * @param {number} start
+			 * @param {number} end
+			 */
+			#emptyTemplateContainer(start, end) {
+				const start_loc = this.#positionAt(start);
+				const end_loc = this.#positionAt(end);
+				const expression = /** @type {ESTreeJSX.JSXEmptyExpression} */ (
+					this.startNodeAt(start, start_loc)
+				);
+				this.finishNodeAt(expression, 'JSXEmptyExpression', end, end_loc);
+				const container = /** @type {ESTreeJSX.JSXExpressionContainer} */ (
+					this.startNodeAt(start, start_loc)
+				);
+				container.expression = expression;
+				return this.finishNodeAt(container, 'JSXExpressionContainer', end, end_loc);
+			}
+
+			/**
+			 * @param {number} index
+			 */
+			#positionAt(index) {
+				const { line, column } = get_line_info(this, index);
+				return new acorn.Position(line, column);
 			}
 
 			/**
@@ -2173,11 +2283,12 @@ export function TSRXPlugin(config) {
 			}
 
 			/**
-			 * A `//` is a comment only when nothing but whitespace precedes it on its
+			 * A `//` is a comment when whitespace comes right before it, it starts a
 			 * line, or — given `run_start`, the position where the current text run
-			 * began (right after a sibling element, code block, or expression
-			 * container) — since that boundary. Once real text has begun, `//` is
-			 * literal so inline text like `https://…` stays text.
+			 * began (right after a tag, an expression container, a code block, or a
+			 * directive's block) — it starts the run. A `//` that touches other text
+			 * or a block comment is text: `https://…`, `a//b`, and `/* a *\/// b`.
+			 * The comment runs to the end of the line, a closing tag on it included.
 			 * @param {number} index
 			 * @param {number} [run_start]
 			 */
@@ -2189,13 +2300,14 @@ export function TSRXPlugin(config) {
 					return false;
 				}
 				if (this.#isLineStartPosition(index)) return true;
-				if (run_start < 0) return false;
-				for (let i = index - 1; i >= run_start; i--) {
-					const ch = this.input.charCodeAt(i);
-					if (ch === CharCode.lineFeed || ch === CharCode.carriageReturn) return false;
-					if (ch !== CharCode.space && ch !== CharCode.tab) return false;
-				}
-				return true;
+				if (index === run_start) return true;
+				const before = this.input.charCodeAt(index - 1);
+				return (
+					before === CharCode.space ||
+					before === CharCode.tab ||
+					before === CharCode.lineFeed ||
+					before === CharCode.carriageReturn
+				);
 			}
 
 			/**
@@ -9170,7 +9282,7 @@ export function TSRXPlugin(config) {
 
 						case CharCode.slash:
 							// Check if this is a comment (// or /*)
-							if (this.input.charCodeAt(this.pos + 1) === CharCode.slash) {
+							if (this.#isTemplateLineCommentStart(this.pos, this.start)) {
 								// '//'
 								// Line comment - handle it properly
 								const commentStart = this.pos;
@@ -9728,7 +9840,7 @@ export function TSRXPlugin(config) {
 						const loc = get_line_info(this, at_index);
 						const at_position = new acorn.Position(loc.line, loc.column);
 						this.finishNodeAt(text_node, 'JSXText', at_index, at_position);
-						if (this.#shouldKeepTemplateTextNode(text_node)) {
+						if (renders_template_text(ws_value)) {
 							body.push(text_node);
 						}
 						this.pos = at_index;
@@ -9745,10 +9857,7 @@ export function TSRXPlugin(config) {
 				if (this.type === tt.braceL) {
 					body.push(this.#parseNativeTemplateExpressionContainer());
 				} else if (this.type === tstt.jsxText) {
-					const text = this.#parseTemplateRawText();
-					if (this.#shouldKeepTemplateTextNode(text)) {
-						body.push(text);
-					}
+					this.#parseTemplateRawText(body);
 				} else if (this.#isJSXControlFlowDirectiveStart()) {
 					const directive = this.#parseJSXControlFlowExpression();
 					body.push(directive);
@@ -10002,14 +10111,11 @@ export function TSRXPlugin(config) {
 				} else {
 					const start = this.start;
 					const type = this.type;
-					const text = this.#parseTemplateRawText();
+					const end = this.#parseTemplateRawText(body);
 					// Text that reads nothing and leaves the same token would be read
 					// again until the stack runs out.
-					if (text.end === start && this.start === start && this.type === type) {
+					if (end === start && this.start === start && this.type === type) {
 						this.unexpected(start);
-					}
-					if (this.#shouldKeepTemplateTextNode(text)) {
-						body.push(text);
 					}
 				}
 

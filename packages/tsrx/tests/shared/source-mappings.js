@@ -310,20 +310,20 @@ export function List({ items =${whitespace}EMPTY_ARRAY as string[] }: { items?: 
 	});
 
 	describe(`[${name}] text with a comment and characters JSX text can't hold`, () => {
-		// Text prints from its `raw`, which leaves out a comment between children
-		// and writes a `>` as `&gt;`, so it is shorter or longer than the source
-		// it spans. The code around it still maps to itself.
+		// A comment between children prints as `{}`, and text writes a `>` as
+		// `&gt;`, so the output is shorter or longer than the source it spans. The
+		// code around it still maps to itself.
 		it('maps the code after the text', () => {
 			const source = `export function App() @{
 	<div>
 		a /* c */ > b &amp; c
 		{value}
-		<span title={other}>x // y</span>
+		<span title={other}>x//y</span>
 	</div>
 }`;
 			const result = compile_to_volar_mappings(source, 'App.tsrx', { loose: true });
 			expect(result.errors).toEqual([]);
-			expect(result.code).toContain('a  &gt; b &amp; c');
+			expect(result.code).toContain('a {} &gt; b &amp; c');
 
 			for (const identifier of ['value', 'other']) {
 				const start = source.indexOf(identifier);
@@ -338,6 +338,31 @@ export function List({ items =${whitespace}EMPTY_ARRAY as string[] }: { items?: 
 					identifier,
 				).toBe(identifier);
 			}
+		});
+	});
+
+	describe(`[${name}] a TypeScript directive between children`, () => {
+		// A comment between children is an empty `{}` in the output; a directive
+		// goes inside it, on the line before the child, as `{/* @ts-expect-error */}`
+		// works in TSX.
+		it('keeps it on the line before the child for the editor', () => {
+			const source = `export function App() @{
+	<div>
+		// @ts-expect-error
+		<Missing a={1} />
+		text /* @ts-ignore */ <Other />
+		/** @ts-expect-error */
+		<Third b={2} />
+		plain /* not a directive */ more
+	</div>
+}`;
+			const result = compile_to_volar_mappings(source, 'App.tsrx', { loose: true });
+			expect(result.errors).toEqual([]);
+			expect(result.code).toMatch(/\n\s*\{\/\* @ts-expect-error \*\/\}\n\s*<Missing a=\{1\} \/>/);
+			expect(result.code).toContain('text {/* @ts-ignore */} <Other />');
+			expect(result.code).toMatch(/\n\s*\{\/\*\* @ts-expect-error \*\/\}\n\s*<Third b=\{2\} \/>/);
+			expect(result.code).toContain('plain {} more');
+			expect(result.code).not.toContain('not a directive');
 		});
 	});
 

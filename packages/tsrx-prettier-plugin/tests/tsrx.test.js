@@ -672,14 +672,18 @@ describe('comments between JSX children', () => {
 		);
 	});
 
-	test('inline block comments keep the spacing around them', async () => {
+	// Laid out as Prettier lays out `{/* c */}`: without text, each child on its
+	// own line.
+	test('inline block comments lay out like {/* c */}', async () => {
 		await expectFormat(
 			`const a = <p>one /* two */ three</p>;
 const b = <p><a />/* c */<b /></p>;`,
 			`const a = <p>one /* two */ three</p>;
 const b = (
   <p>
-    <a />/* c */<b />
+    <a />
+    /* c */
+    <b />
   </p>
 );
 `,
@@ -701,9 +705,9 @@ const b = (
 		);
 	});
 
-	// A comment adds nothing to the text around it: the whitespace on its two
-	// sides is one run, which renders a space without a line break, and nothing
-	// with one beside an element or the start or end of the children (#639).
+	// A comment renders like `{/* c */}`: the text on each side of it follows
+	// JSX's whitespace rules on its own, and Prettier's layout of `{/* c */}`
+	// keeps what it renders (#639).
 	test('the whitespace around a comment renders the same after formatting (#639)', async () => {
 		await expectFormat(
 			`export function App() @{
@@ -727,14 +731,12 @@ const b = (
       {" "}
       /* c */ <i />
     </div>
-    <div>
-      /* c */ 2
-    </div>
+    <div>/* c */ 2</div>
     <div>
       {x} /* c */
     </div>
     <p>
-      <i />{" "}// c
+      <i /> // c
     </p>
   </>
 }
@@ -742,9 +744,8 @@ const b = (
 		);
 	});
 
-	// A `{" "}` beside a comment is part of the comment's run. It becomes a
-	// plain space where one renders, and stays `{" "}` next to a line break the
-	// comment keeps, which would drop a plain space.
+	// A `{" "}` beside a comment is a space, as beside `{/* c */}`; before a line
+	// comment that starts its line, it's written out.
 	test('a {" "} beside a comment keeps its space', async () => {
 		await expectFormat(
 			`export function App() @{
@@ -763,18 +764,19 @@ const b = (
   <>
     <p>one /* c */two</p>
     <p>
-      <b /> /* c */<i />
+      <b /> /* c */
+      <i />
     </p>
     <p>
-      <b />/* c */ <i />
+      <b />
+      /* c */ <i />
     </p>
     <p>
-      one{" "}/* c */
+      one /* c */
       <b />
     </p>
     <p>
-      one
-      // c
+      one // c
       two
     </p>
   </>
@@ -786,19 +788,23 @@ const b = (
 	test('a {" "} with a comment inside is printed with its comment', async () => {
 		await expectFormat(
 			`const a = <p>one /* c */{/* d */ " "}two</p>;`,
-			`const a = <p>one /* c */{/* d */ " "}two</p>;\n`,
+			`const a = (
+  <p>
+    one /* c */
+    {/* d */ " "}two
+  </p>
+);
+`,
 		);
 	});
 
-	// Prettier treats a run of spaces as one (`<p>a  b</p>` prints `a b`), so a
-	// space on each side of a comment renders like the one in the source.
-	test('the space around a group of comments breaks in one place', async () => {
+	test('a group of comments lays out like {/* c */} children', async () => {
 		await expectFormat(
 			`const a = <p>one /* c */ /* d */ <b /></p>;`,
 			`const a = (
   <p>
-    one /* c */ /* d */{" "}
-    <b />
+    one /* c */{" "}
+    /* d */ <b />
   </p>
 );
 `,
@@ -903,51 +909,86 @@ const u = <div>/* c */</div>; /* trail */
 	});
 });
 
-// `//` after other text on its line is text (as in `https://…`), and at the
-// start of a line a comment, so formatting never starts a line with it (#849).
-describe('text with a word that starts with //', () => {
-	test('keeps the // word on the line of the word before it', async () => {
+// A `//` is a comment when whitespace comes right before it, it starts a line,
+// or it comes right after a tag, `}`, or a block; it runs to the end of its
+// line. Touching other text or a block comment, it's text (as in `https://…`).
+// As `{/* prettier-ignore */}` keeps the next child as written in Prettier.
+describe('prettier-ignore between children', () => {
+	test('keeps the next child as written', async () => {
 		await expectFormat(
-			`export function Links() @{
-  <p>
-    Our docs live at the project site and the API reference is at the same host // see below
-  </p>
+			`export function A() @{
+  <div>
+    // prettier-ignore
+    <span   a="1"   b="2" />
+    <p   x="1" />
+  </div>
 }`,
-			`export function Links() @{
-  <p>
-    Our docs live at the project site and the API reference is at the same
-    host // see below
-  </p>
+			`export function A() @{
+  <div>
+    // prettier-ignore
+    <span   a="1"   b="2" />
+    <p x="1" />
+  </div>
 }
 `,
 		);
+	});
+});
+
+describe('// in text', () => {
+	test('touching text, it is a word, as in Prettier', async () => {
 		await expectFormat(
-			`const a = <p>aaaa bbbb // c</p>;`,
+			`const a = <p>see https://example.com/docs and a//b, which are text and wrap like words</p>;`,
 			`const a = (
   <p>
-    aaaa
-    bbbb //
-    c
+    see https://example.com/docs and a//b, which are text and wrap like words
   </p>
 );
 `,
-			{ printWidth: 12 },
 		);
 	});
 
-	test('keeps a // word after a comment on the comment line', async () => {
+	test('after whitespace, it is a comment, laid out as Prettier lays out {// …}', async () => {
 		await expectFormat(
-			`const a = <p>one two /* x */ // three</p>;`,
+			`const a = <p>a word // a comment
+</p>;
+const b = (
+  <p>
+    Our docs live at the project site and the API reference is at the same host // see below
+  </p>
+);`,
 			`const a = (
   <p>
-    one two
-    /* x */ //
-    three
+    a word // a comment
+  </p>
+);
+const b = (
+  <p>
+    Our docs live at the project site and the API reference is at the same host{" "}
+    // see below
   </p>
 );
 `,
-			{ printWidth: 12 },
 		);
+	});
+
+	test('text that starts with // right after a block comment stays on its line', async () => {
+		await expectFormat(
+			`const a = <p>one /* x */// two three</p>;`,
+			`const a = (
+  <p>
+    one{" "}
+    /* x *///
+    two three
+  </p>
+);
+`,
+			{ printWidth: 14 },
+		);
+	});
+
+	test('a comment takes a closing tag on its line with it', async () => {
+		await expect(format(`const a = <p>a //comment </p>;`)).rejects.toThrow(/Unclosed tag '<p>'/);
 	});
 });
 
