@@ -684,6 +684,111 @@ const b = (
 		);
 	});
 
+	// A comment adds nothing to the text around it: the whitespace on its two
+	// sides is one run, which renders a space without a line break, and nothing
+	// with one beside an element or the start or end of the children (#639).
+	test('the whitespace around a comment renders the same after formatting (#639)', async () => {
+		await expectFormat(
+			`export function App() @{
+  <>
+    <div><b>t</b> /* c */ </div>
+    <div> /* c */ <i /></div>
+    <div>
+      /* c */ 2</div>
+    <div>{x} /* c */
+    </div>
+    <p><i /> {" "}// c
+    </p>
+  </>
+}`,
+			`export function App() @{
+  <>
+    <div>
+      <b>t</b> /* c */{" "}
+    </div>
+    <div>
+      {" "}
+      /* c */ <i />
+    </div>
+    <div>
+      /* c */ 2
+    </div>
+    <div>
+      {x} /* c */
+    </div>
+    <p>
+      <i />{" "}// c
+    </p>
+  </>
+}
+`,
+		);
+	});
+
+	// A `{" "}` beside a comment is part of the comment's run. It becomes a
+	// plain space where one renders, and stays `{" "}` next to a line break the
+	// comment keeps, which would drop a plain space.
+	test('a {" "} beside a comment keeps its space', async () => {
+		await expectFormat(
+			`export function App() @{
+  <>
+    <p>one{" "}/* c */two</p>
+    <p><b />{" "}/* c */<i /></p>
+    <p><b />/* c */{" "}<i /></p>
+    <p>one{" "}/* c */
+      <b /></p>
+    <p>one{" "}
+      // c
+      two</p>
+  </>
+}`,
+			`export function App() @{
+  <>
+    <p>one /* c */two</p>
+    <p>
+      <b /> /* c */<i />
+    </p>
+    <p>
+      <b />/* c */ <i />
+    </p>
+    <p>
+      one{" "}/* c */
+      <b />
+    </p>
+    <p>
+      one
+      // c
+      two
+    </p>
+  </>
+}
+`,
+		);
+	});
+
+	test('a {" "} with a comment inside is printed with its comment', async () => {
+		await expectFormat(
+			`const a = <p>one /* c */{/* d */ " "}two</p>;`,
+			`const a = <p>one /* c */{/* d */ " "}two</p>;\n`,
+		);
+	});
+
+	// Prettier treats a run of spaces as one (`<p>a  b</p>` prints `a b`), so a
+	// space on each side of a comment renders like the one in the source.
+	test('the space around a group of comments breaks in one place', async () => {
+		await expectFormat(
+			`const a = <p>one /* c */ /* d */ <b /></p>;`,
+			`const a = (
+  <p>
+    one /* c */ /* d */{" "}
+    <b />
+  </p>
+);
+`,
+			{ printWidth: 20 },
+		);
+	});
+
 	test('in a fragment, and a JSDoc-style block comment is re-indented', async () => {
 		await expectFormat(
 			`const a = <>
@@ -865,6 +970,31 @@ describe('prettier/standalone', () => {
 }
 `);
 		expect(output).toBe(await prettier.format(source, options));
+	});
+});
+
+// Where core's tree differs from typescript-estree's, the adapter reshapes it.
+describe('the typescript-estree shape', () => {
+	test("a comment in a class method's type parameters stays in them (#630)", async () => {
+		await expectFormat(
+			`class A {
+  m</* c */ T>(a: T) {}
+  n<
+    // c
+    T,
+  >(a: T) {}
+  static async *o /* a */ <T>(a: T) {}
+}`,
+			`class A {
+  m</* c */ T>(a: T) {}
+  n<
+    // c
+    T,
+  >(a: T) {}
+  static async *o/* a */ <T>(a: T) {}
+}
+`,
+		);
 	});
 });
 
