@@ -4961,7 +4961,7 @@ foo();`;
 	it('parses a `@{ }` body on a generic function with a return type', () => {
 		const ast = parseModule(`function Test<T>(value: T): T @{}`, 'App.tsrx');
 		const fn = firstStatement(ast, 'FunctionDeclaration');
-		expect(found(fn.typeParameters).params.map((p) => p.name)).toEqual(['T']);
+		expect(found(fn.typeParameters).params.map((p) => p.name.name)).toEqual(['T']);
 		expect(found(fn.returnType).typeAnnotation.type).toBe('TSTypeReference');
 		expect(codeBlock(fn.body).type).toBe('JSXCodeBlock');
 	});
@@ -5007,7 +5007,7 @@ foo();`;
 		const ast = parseModule(`function Test<T>(items: T[]): T | undefined @{}`, 'App.tsrx');
 		const fn = firstStatement(ast, 'FunctionDeclaration');
 		expect(
-			found(as_type(fn, 'FunctionDeclaration').typeParameters).params.map((p) => p.name),
+			found(as_type(fn, 'FunctionDeclaration').typeParameters).params.map((p) => p.name.name),
 		).toEqual(['T']);
 		const union = found(as_type(fn, 'FunctionDeclaration').returnType).typeAnnotation;
 		assert_type(union, 'TSUnionType');
@@ -5209,6 +5209,48 @@ foo();`;
 			true,
 		);
 		expect(messages.some((m) => m.startsWith('10:') && /single node/.test(m))).toBe(true);
+	});
+
+	// A type parameter's name is the Identifier acorn-typescript reads, with its
+	// position, as in typescript-estree (#873)
+	it.each([
+		['a type parameter', 'function f<T>(x: T) {}', 'T'],
+		['a type parameter after modifiers and a comment', 'class A<in /* c */ out T> {}', 'T'],
+		['a const type parameter with a constraint', 'function f<const T extends string>() {}', 'T'],
+		['a mapped type key', 'type M = { [K in keyof X]: X[K] };', 'K'],
+		['an infer type', 'type I = X extends Array<infer U> ? U : never;', 'U'],
+	])('gives %s its name as an Identifier', (_label, source, name) => {
+		const parameter = find_first(
+			parseModule(source, 'App.tsrx'),
+			(node) => node.type === 'TSTypeParameter',
+		);
+		assert_type(parameter, 'TSTypeParameter');
+		const identifier = as_type(parameter.name, 'Identifier');
+		const start = source.lastIndexOf(
+			name,
+			source.indexOf(name === 'T' ? '>' : name === 'K' ? ' in' : ' ?'),
+		);
+		expect(identifier.name).toBe(name);
+		expect([identifier.start, identifier.end]).toEqual([start, start + name.length]);
+		expect(identifier.loc?.start).toEqual(acorn.getLineInfo(source, start));
+	});
+
+	// The comments around a type parameter's name stay on the type parameter,
+	// which prints them around the name, as when the name was a string (#873)
+	it.each([
+		'function f<const /* c */ T extends string>() {}',
+		'function h<T /* c */ extends string>() {}',
+		'type M = { [/* c */ K in keyof X]: X[K] };',
+		'type I = X extends Array<infer /* c */ U> ? U : never;',
+	])('gives no comment to the type parameter name in %j', (source) => {
+		const parameter = find_first(
+			parseModule(source, 'App.tsrx', { collect: true, errors: [], comments: [] }),
+			(node) => node.type === 'TSTypeParameter',
+		);
+		assert_type(parameter, 'TSTypeParameter');
+		const name = /** @type {AST.Identifier & AST.NodeWithMaybeComments} */ (parameter.name);
+		expect(name.leadingComments ?? []).toEqual([]);
+		expect(name.trailingComments ?? []).toEqual([]);
 	});
 
 	it('keeps shorthand attribute locations aligned across every JavaScript line terminator', () => {
@@ -9626,7 +9668,7 @@ describe('mistakes that TypeScript reports only from its checker', () => {
 			errors: [["'public' modifier cannot appear on a type parameter.", 'public T']],
 			throws: "'public' modifier cannot appear on a type parameter. (1:12)",
 			pick: first_type_parameter,
-			match: { type: 'TSTypeParameter', accessibility: 'public', name: 'T' },
+			match: { type: 'TSTypeParameter', accessibility: 'public', name: { name: 'T' } },
 		},
 		{
 			source: 'function f<in T>() {}',
