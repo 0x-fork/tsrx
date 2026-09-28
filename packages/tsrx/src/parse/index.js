@@ -2626,6 +2626,12 @@ export function get_comment_handlers(source, comments, index = 0) {
 
 			walk(ast, null, {
 				_(node, { next, path, visit }) {
+					// A comment attached already, which the walk reaches through an empty
+					// container's `leadingComments`, takes no comments: the ones inside the
+					// container are its own (#741)
+					const type = /** @type {string} */ (node.type);
+					if (type === 'Line' || type === 'Block') return;
+
 					// A type parameter's name takes no comments: the type parameter keeps
 					// the ones around it (see `takeTypeParameterNameComments`), as when the
 					// name was a string (#873)
