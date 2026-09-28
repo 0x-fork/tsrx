@@ -50,8 +50,8 @@ const BROKEN_MARKUP_CODES = new Set([
  * `declare` before a `using` declaration, and `import.source`.
  *
  * It formats the others, and leaves out what its tree has no place for, as the
- * output does: a repeated modifier, a rest parameter's default, a modifier in a
- * block, `declare` before an import. TS1039 isn't here: Prettier rejects an
+ * output does: a repeated modifier, a modifier in a block, `declare` before an
+ * import. TS1039 isn't here: Prettier rejects an
  * initializer in an ambient variable declaration (`declare let x = 1`), but not
  * in an ambient class (`declare class A { x = 1 }`).
  */
