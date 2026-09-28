@@ -438,11 +438,13 @@ class Adapter {
 				break;
 
 			case 'PropertyDefinition':
-			case 'TSAbstractPropertyDefinition':
+				// typescript-estree names an abstract member's type, and Prettier
+				// checks it: it unquotes an abstract field's key (#903).
 				if (node.accessor) {
-					node.type =
-						node.type === 'PropertyDefinition' ? 'AccessorProperty' : 'TSAbstractAccessorProperty';
+					node.type = node.abstract ? 'TSAbstractAccessorProperty' : 'AccessorProperty';
 					delete node.accessor;
+				} else if (node.abstract) {
+					node.type = 'TSAbstractPropertyDefinition';
 				}
 				break;
 
@@ -481,7 +483,7 @@ class Adapter {
 				break;
 
 			case 'MethodDefinition':
-			case 'TSAbstractMethodDefinition':
+				if (node.abstract) node.type = 'TSAbstractMethodDefinition';
 				// A method without a body (an overload, an abstract method, a method
 				// of a `declare class`): Prettier reads `TSDeclareMethod` as babel's
 				// whole method and prints its `async`, `*` and key again (#916).
