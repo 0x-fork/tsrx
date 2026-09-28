@@ -1,10 +1,6 @@
-# tsrx-prettier-plugin
+# @tsrx/prettier-plugin
 
-An experimental Prettier plugin for [TSRX](https://tsrx.dev) that formats
-everything except TSRX syntax with Prettier's own JavaScript and TypeScript
-printer, unlike [`@tsrx/prettier-plugin`](../prettier-plugin), which prints every
-node itself. It is not published yet: whether it replaces `@tsrx/prettier-plugin`
-or is released on its own is decided later.
+A Prettier plugin for formatting [TSRX](https://tsrx.dev) files.
 
 The goal is Prettier's output wherever TSRX is TSX, so TSRX only differs where its
 syntax does: `@{ … }` blocks, `@if`/`@for`/`@switch`/`@try`, `{value}` shorthand
@@ -79,17 +75,15 @@ props, `<style>`/`<script>` bodies, and comments between JSX children.
   it after text or a comment (touching them, `//` is text); text that starts with
   `//` right after a block comment stays on its line. Every other element is
   printed by Prettier itself. Keep the copy in step with Prettier when upgrading.
-- **Range formatting** (`src/range.js`): Prettier formats a selection
-  (`rangeStart`, `rangeEnd`) only for its own parsers, by the parser's name. For
-  one such format, the plugin names its parser `typescript` and resolves that name
-  to itself, so Prettier chooses the statements to format as it does for
-  TypeScript. A range of template content (an output, a directive, a branch, a
-  body) can't be formatted on its own, so the plugin prints it where it is in the
-  file. A range that Prettier grows to several children of an element keeps its
-  text.
 
 The plugin needs no other Prettier plugin, including in `prettier/standalone`,
 except to format JSON, HTML, or Markdown `<script>` bodies there.
+
+## Selection formatting
+
+The plugin supports selection formatting (also called range formatting). Use your
+editor's **Format Selection** command to format part of a `.tsrx` file, or pass
+Prettier's `rangeStart` and `rangeEnd` options when formatting through its API.
 
 ## In the browser
 
@@ -101,7 +95,7 @@ finds a body's parser and printer among all the plugins in `plugins`.
 
 ```js
 import * as prettier from 'prettier/standalone';
-import tsrx from 'tsrx-prettier-plugin';
+import tsrx from '@tsrx/prettier-plugin';
 // JSON, import maps, and speculation rules: babel parses JSON, estree prints it
 import * as babel from 'prettier/plugins/babel';
 import * as estree from 'prettier/plugins/estree';
@@ -119,29 +113,31 @@ const formatted = await prettier.format(code, {
 In Node, `prettier` loads its own plugins, so these bodies are formatted without
 passing them.
 
-The Prettier peer dependency is `>=3.6.0`, with no upper limit. The full
-formatting suite uses 3.9.9; focused import-type compatibility tests also run with
-3.6.0. Older versions have formatting differences and known compatibility gaps,
-including `prettier-ignore` on template outputs.
+## Prettier versions
 
-Range formatting relies on Prettier passing a range's options from the file's
-parse to the range's. When upgrading Prettier, check `src/main/range.js` and
-`formatRange` in `src/main/core.js`, as well as the JSX printing that `src/jsx.js`
-copies.
+The Prettier peer dependency is `>=3.6.0`, with no upper limit. **We recommend
+Prettier 3.9.9 or newer for more correct formatting.** Older versions have
+formatting differences and known compatibility gaps, including `prettier-ignore`
+on template outputs.
+
+The full formatting suite uses 3.9.9; focused import-type compatibility tests also
+run with 3.6.0.
 
 ## Tests
 
 - `tests/import-types.test.js` checks import types, comments, standalone output,
   cursors, and selections with both the workspace Prettier and 3.6.0. Run the
   older-version checks with `pnpm test --project tsrx-prettier-plugin-3.6`.
-- `tests/tsrx.test.js` covers TSRX syntax, which Prettier's own tests don't.
-- `tests/tsrx-migrated.test.js` holds every test of `@tsrx/prettier-plugin` that
-  exercises TSRX syntax (#852, Phase 2), under one `describe` with their old
-  names. Each expects this plugin's output and that formatting it again changes
-  nothing, and, where Prettier's `typescript` parser gives the same output, checks
-  that too. The old tests of plain JavaScript and TypeScript aren't migrated:
-  Prettier prints those, the imported Prettier tests run them through the TSRX
-  parser, and core's parser tests cover the parser.
+- `tests/tsrx.test.js` covers TSRX syntax, which Prettier's own tests don't. Each
+  formatting test also checks that a second format changes nothing.
+- `tests/tsrx-migrated.test.js` holds every test of the
+  [previous implementation](../old-prettier-plugin) that exercises TSRX syntax
+  (#852, Phase 2), under one `describe` with their old names. Each expects this
+  plugin's output and that formatting it again changes nothing, and, where
+  Prettier's `typescript` parser gives the same output, checks that too. The old
+  tests of plain JavaScript and TypeScript aren't migrated: Prettier prints those,
+  the imported Prettier tests run them through the TSRX parser, and core's parser
+  tests cover the parser.
 - `tests/prettier/` holds Prettier's own format tests for JavaScript, JSX, and
   TypeScript, imported by `scripts/import-prettier-tests.js`. A case is imported
   when Prettier's `typescript` parser prints the snapshot's output and the input
@@ -158,13 +154,37 @@ copies.
   from Prettier, each with its reason. An override skips the case (for example,
   syntax that is only a proposal), expects Prettier's output for the input as a
   `.tsx` file, or replaces the input or the expected output.
-- `tests/tsrx.test.js` covers the TSRX syntax. Each formatting test also checks
-  that a second format changes nothing.
-
-To update the tests after upgrading Prettier, run
-`pnpm --filter tsrx-prettier-plugin import-prettier-tests`, which clones the
-installed release's tests (or pass `--source <prettier checkout>`), then refresh
-the known failures.
 
 The files in `tests/prettier/` come from Prettier and are under
 [Prettier's MIT license](tests/prettier/LICENSE).
+
+## Ongoing: keeping up with Prettier
+
+The maintenance checklist from [#852](https://github.com/tsrx-org/tsrx/issues/852)
+applies to every Prettier upgrade:
+
+1. Re-import the installed release's format tests, then review and refresh the
+   known failures:
+
+   ```sh
+   pnpm --filter tsrx-prettier-plugin import-prettier-tests
+   UPDATE_KNOWN_FAILURES=1 pnpm test --project tsrx-prettier-plugin
+   pnpm test --project tsrx-prettier-plugin --project tsrx-prettier-plugin-3.6
+   ```
+
+   The importer clones the installed release's tests, or accepts
+   `--source <prettier checkout>`. Review changes to the imported cases,
+   overrides, and known failures: a new failure can mean a regression or a change
+   in Prettier's output.
+
+2. Keep `src/jsx.js` in step with Prettier's `printJsxElementInternal` and
+   `printJsxChildren`, which it copies to handle comments between TSRX children.
+3. Check `src/parse.js` against Prettier's `src/language-js/parse/postprocess`.
+   The node shapes and metadata the printer expects can change between releases.
+4. Check range formatting in `src/range.js` against Prettier's `formatRange` in
+   `src/main/core.js` and `calculateRange` in `src/main/range.js`. It relies on
+   Prettier passing the options object from the file's parse to the range's
+   format, and on how Prettier grows a selection to AST nodes. For example,
+   [prettier/prettier#19880](https://github.com/prettier/prettier/pull/19880)
+   changes how a range grows after 3.9. Verify the range and cursor tests on each
+   upgrade, even when the release is already allowed by the peer dependency.
