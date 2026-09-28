@@ -1773,6 +1773,35 @@ test("an abstract member's key is quoted like the typescript parser quotes it", 
 	);
 });
 
+// typescript-estree gives a template literal type its own node, whose `${…}`
+// comments Prettier places differently from a template literal's (#904).
+test('a comment in a template literal type moves like the typescript parser moves it', async () => {
+	const source = `type A = \`\${
+  B
+  // b
+}x\${C}\`;
+type D = \`\${B /* a */}-\${number}\`;
+type E<T> = T extends \`\${infer H}\${infer R}\` ? [H, R] : never;
+const f = \`\${
+  g
+  // g
+}x\${h}\`;
+`;
+	const expected = `type A = \`\${B}x\${
+  // b
+  C
+}\`;
+type D = \`\${B /* a */}-\${number}\`;
+type E<T> = T extends \`\${infer H}\${infer R}\` ? [H, R] : never;
+const f = \`\${
+  g
+  // g
+}x\${h}\`;
+`;
+	await expectFormat(source, expected);
+	expect(await prettier.format(source, { parser: 'typescript' })).toBe(expected);
+});
+
 describe('type parameter modifiers', () => {
 	// The name follows the modifiers and the comments between them (#839)
 	test.each([
